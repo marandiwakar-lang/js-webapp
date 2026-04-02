@@ -1,0 +1,85 @@
+name: CI/CD + OWASP Security Scan
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  build-scan-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    # -----------------------------
+    # 1. Checkout Code
+    # -----------------------------
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    # -----------------------------
+    # 2. Setup Node.js 20
+    # -----------------------------
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    # -----------------------------
+    # 3. Install Dependencies
+    # -----------------------------
+    - name: Install Dependencies
+      run: npm install
+
+    # -----------------------------
+    # 4. Run Build
+    # -----------------------------
+    - name: Build Application
+      run: npm run build
+
+    # -----------------------------
+    # 5. OWASP Dependency Check
+    # -----------------------------
+    - name: Run OWASP Dependency Check
+      uses: dependency-check/Dependency-Check_Action@main
+      with:
+        project: "js-webapp"
+        path: "."
+        format: "JSON"
+        out: "reports"
+
+    # -----------------------------
+    # 6. Convert Report to Custom Format
+    # -----------------------------
+    - name: Generate Custom Vulnerability Report
+      run: |
+        python3 scripts/owasp_report.py
+
+    # -----------------------------
+    # 7. Upload Report Artifact
+    # -----------------------------
+    - name: Upload Security Report
+      uses: actions/upload-artifact@v4
+      with:
+        name: vulnerability-report
+        path: reports/final-report.txt
+
+    # -----------------------------
+    # 8. Deploy to EC2 (PM2)
+    # -----------------------------
+    - name: Deploy to EC2
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.EC2_HOST }}
+        username: devops
+        key: ${{ secrets.EC2_SSH_KEY }}
+        port: 2222
+        script: |
+          cd /home/devops/js-webapp
+          git pull origin main
+          
+          export NVM_DIR="$HOME/.nvm"
+          source $NVM_DIR/nvm.sh
+          
+          npm install
+          npm run build
+          
+          pm2 restart nextjs-app || pm2 start npm --name "nextjs-app" -- start
