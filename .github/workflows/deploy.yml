@@ -10,13 +10,13 @@ jobs:
 
     steps:
     # -----------------------------
-    # 1. Checkout Code
+    # 1. Checkout
     # -----------------------------
     - name: Checkout Repository
       uses: actions/checkout@v4
 
     # -----------------------------
-    # 2. Setup Node.js 20
+    # 2. Node Setup
     # -----------------------------
     - name: Setup Node.js
       uses: actions/setup-node@v4
@@ -29,18 +29,17 @@ jobs:
     - name: Install Dependencies
       run: npm install
 
-    # 🔥 IMPORTANT: Generate lock file (fix OWASP warnings)
     - name: Generate package-lock.json
       run: npm install --package-lock-only
 
     # -----------------------------
-    # 4. Build Application
+    # 4. Build
     # -----------------------------
     - name: Build Application
       run: npm run build
 
     # -----------------------------
-    # 5. OWASP Dependency Check
+    # 5. OWASP Scan
     # -----------------------------
     - name: Run OWASP Dependency Check
       uses: dependency-check/Dependency-Check_Action@main
@@ -51,7 +50,7 @@ jobs:
         out: "reports"
 
     # -----------------------------
-    # 🔥 FIX PERMISSIONS (your error fix)
+    # FIX PERMISSIONS
     # -----------------------------
     - name: Fix permissions
       run: |
@@ -59,29 +58,29 @@ jobs:
         chmod -R 777 reports
 
     # -----------------------------
-    # 6. Generate Custom Report
+    # 6. Generate HTML Report
     # -----------------------------
-    - name: Generate Custom Vulnerability Report
+    - name: Generate HTML Report
       run: python3 scripts/owasp_report.py
 
     # -----------------------------
-    # 7. Fail on Critical Issues
+    # 7. Fail on Critical
     # -----------------------------
     - name: Fail on Critical Vulnerabilities
       run: |
-        if grep -q "Critical" reports/final-report.txt; then
+        if grep -q "Critical" reports/final-report.html; then
           echo "❌ Critical vulnerabilities found!"
           exit 1
         fi
 
     # -----------------------------
-    # 8. Upload Report Artifact
+    # 8. Upload HTML Report
     # -----------------------------
-    - name: Upload Security Report
+    - name: Upload HTML Report
       uses: actions/upload-artifact@v4
       with:
-        name: vulnerability-report
-        path: reports/final-report.txt
+        name: owasp-html-report
+        path: reports/final-report.html
 
     # -----------------------------
     # 9. Deploy to EC2
