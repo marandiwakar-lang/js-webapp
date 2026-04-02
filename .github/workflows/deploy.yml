@@ -15,6 +15,8 @@ jobs:
     # -----------------------------
     - name: Checkout Code
       uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
       env:
         FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
@@ -38,22 +40,43 @@ jobs:
       run: npm install --package-lock-only
 
     # -----------------------------
-    # 4. NPM Audit Gate
-    # Fail fast on critical/high vulnerabilities
-    # before wasting time on build + scan.
-    # Remove --audit-level=high to only block on critical.
+    # 4. Auto-fix NPM Vulnerabilities
+    # Runs npm audit fix, rebuilds, then commits
+    # the updated package.json + package-lock.json
+    # back to main so the repo stays clean.
+    # The commit is skipped if nothing changed.
+    # -----------------------------
+    - name: Auto-fix NPM Vulnerabilities
+      run: npm audit fix
+
+    - name: Commit Fixed Lockfile
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git add package.json package-lock.json
+        git diff --staged --quiet || git commit -m "fix: resolve remaining npm audit vulnerabilities"
+        git push
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    # -----------------------------
+    # 5. NPM Audit Gate
+    # Blocks the pipeline on any remaining critical
+    # vulnerabilities after auto-fix.
+    # High/moderate findings appear in the OWASP
+    # report but do not block the deploy.
     # -----------------------------
     - name: NPM Audit — Fail on Critical Only
       run: npm audit --audit-level=critical
 
     # -----------------------------
-    # 5. Build App
+    # 6. Build App
     # -----------------------------
     - name: Build Application
       run: npm run build
 
     # -----------------------------
-    # 6. OWASP Dependency Scan
+    # 7. OWASP Dependency Scan
     # -----------------------------
     - name: Run OWASP Dependency Check
       uses: dependency-check/Dependency-Check_Action@main
@@ -64,7 +87,7 @@ jobs:
         out: "reports"
 
     # -----------------------------
-    # 7. Fix Docker Permission Issue
+    # 8. Fix Docker Permission Issue
     # -----------------------------
     - name: Prepare Writable Reports
       run: |
@@ -72,13 +95,13 @@ jobs:
         cp reports/dependency-check-report.json writable-reports/
 
     # -----------------------------
-    # 8. Generate HTML Report
+    # 9. Generate HTML Report
     # -----------------------------
     - name: Generate HTML Report
       run: python3 scripts/owasp_report.py
 
     # -----------------------------
-    # 9. Fail on Critical (OWASP)
+    # 10. Fail on Critical (OWASP)
     # -----------------------------
     - name: Fail if Critical Vulnerabilities Found
       run: |
@@ -88,7 +111,7 @@ jobs:
         fi
 
     # -----------------------------
-    # 10. Upload Report
+    # 11. Upload Report
     # Always upload even if previous steps failed,
     # so the report is available for investigation.
     # -----------------------------
@@ -102,7 +125,7 @@ jobs:
         FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     # -----------------------------
-    # 11. SERVER SETUP + DEPLOY
+    # 12. SERVER SETUP + DEPLOY
     # -----------------------------
     - name: Provision Server & Deploy App
       uses: appleboy/ssh-action@v1.0.3
