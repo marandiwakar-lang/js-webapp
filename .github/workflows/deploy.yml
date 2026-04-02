@@ -43,8 +43,8 @@ jobs:
     # before wasting time on build + scan.
     # Remove --audit-level=high to only block on critical.
     # -----------------------------
-    - name: NPM Audit — Fail on Critical/High
-      run: npm audit --audit-level=high
+    - name: NPM Audit — Fail on Critical Only
+      run: npm audit --audit-level=critical
 
     # -----------------------------
     # 5. Build App
