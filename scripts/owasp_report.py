@@ -1,7 +1,11 @@
 import json
+import os
 
-input_file = "reports/dependency-check-report.json"
-output_file = "reports/final-report.html"
+input_file = "writable-reports/dependency-check-report.json"
+output_file = "writable-reports/final-report.html"
+
+# Ensure directory exists
+os.makedirs("writable-reports", exist_ok=True)
 
 def map_severity(score):
     if score >= 9:
@@ -48,7 +52,7 @@ th { background:#1e293b; }
 <th>File</th>
 <th>Severity</th>
 <th>Description</th>
-<th>Business Impact</th>
+<th>Impact</th>
 <th>Fix</th>
 </tr>
 """
@@ -81,4 +85,4 @@ html += """
 with open(output_file, "w") as f:
     f.write(html)
 
-print("✅ HTML report generated at:", output_file)
+print("✅ HTML report generated:", output_file)
