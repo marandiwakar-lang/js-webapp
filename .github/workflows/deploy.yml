@@ -1,22 +1,23 @@
-name: CI/CD + OWASP Security Scan
+name: Full DevSecOps Pipeline
 
 on:
   push:
     branches: [ main ]
 
 jobs:
-  build-scan-deploy:
+  deploy:
     runs-on: ubuntu-latest
 
     steps:
+
     # -----------------------------
     # 1. Checkout
     # -----------------------------
-    - name: Checkout Repository
+    - name: Checkout Code
       uses: actions/checkout@v4
 
     # -----------------------------
-    # 2. Node Setup
+    # 2. Setup Node
     # -----------------------------
     - name: Setup Node.js
       uses: actions/setup-node@v4
@@ -29,11 +30,11 @@ jobs:
     - name: Install Dependencies
       run: npm install
 
-    - name: Generate package-lock.json
+    - name: Generate Lock File
       run: npm install --package-lock-only
 
     # -----------------------------
-    # 4. Build
+    # 4. Build App
     # -----------------------------
     - name: Build Application
       run: npm run build
@@ -50,24 +51,23 @@ jobs:
         out: "reports"
 
     # -----------------------------
-    # ✅ COPY FILE (KEY FIX)
+    # 6. Fix Docker Permission Issue
     # -----------------------------
-    - name: Copy report to writable location
+    - name: Prepare Writable Reports
       run: |
         mkdir -p writable-reports
         cp reports/dependency-check-report.json writable-reports/
 
     # -----------------------------
-    # 6. Generate HTML Report
+    # 7. Generate HTML Report
     # -----------------------------
     - name: Generate HTML Report
-      run: |
-        python3 scripts/owasp_report.py
+      run: python3 scripts/owasp_report.py
 
     # -----------------------------
-    # 7. Fail on Critical
+    # 8. Fail on Critical
     # -----------------------------
-    - name: Fail on Critical Vulnerabilities
+    - name: Fail if Critical Vulnerabilities Found
       run: |
         if grep -q "Critical" writable-reports/final-report.html; then
           echo "❌ Critical vulnerabilities found!"
@@ -75,32 +75,145 @@ jobs:
         fi
 
     # -----------------------------
-    # 8. Upload Report
+    # 9. Upload Report
     # -----------------------------
     - name: Upload HTML Report
       uses: actions/upload-artifact@v4
       with:
-        name: owasp-html-report
+        name: owasp-report
         path: writable-reports/final-report.html
 
     # -----------------------------
-    # 9. Deploy
+    # 10. SERVER SETUP + DEPLOY
     # -----------------------------
-    - name: Deploy to EC2
+    - name: Provision Server & Deploy App
       uses: appleboy/ssh-action@v1.0.3
       with:
         host: ${{ secrets.EC2_HOST }}
-        username: devops
+        username: ubuntu
         key: ${{ secrets.EC2_SSH_KEY }}
-        port: 2222
         script: |
-          cd /home/devops/js-webapp
-          git pull origin main
+          set -e
 
+          USERNAME="devops"
+          APP_DIR="/home/devops/js-webapp"
+
+          # -----------------------------
+          # USER SETUP
+          # -----------------------------
+          if ! id "$USERNAME" &>/dev/null; then
+            sudo adduser --disabled-password --gecos "" $USERNAME
+          fi
+          sudo usermod -aG sudo $USERNAME
+
+          # -----------------------------
+          # SSH HARDENING
+          # -----------------------------
+          sudo sed -i 's/^#\?PermitRootLogin .*/PermitRootLogin no/' /etc/ssh/sshd_config
+          sudo sed -i 's/^#\?PasswordAuthentication .*/PasswordAuthentication no/' /etc/ssh/sshd_config
+          sudo sed -i 's/^#\?Port .*/Port 2222/' /etc/ssh/sshd_config
+          sudo systemctl restart ssh
+
+          # -----------------------------
+          # FIREWALL
+          # -----------------------------
+          sudo ufw allow 2222/tcp
+          sudo ufw allow 80/tcp
+          sudo ufw allow 443/tcp
+          sudo ufw --force enable
+
+          # -----------------------------
+          # INSTALL PACKAGES
+          # -----------------------------
+          sudo apt update -y
+          sudo apt install -y nginx git curl certbot python3-certbot-nginx
+
+          # -----------------------------
+          # NODE + PM2 (DEVOPS USER)
+          # -----------------------------
+          sudo -u devops bash << 'EOF'
           export NVM_DIR="$HOME/.nvm"
-          source $NVM_DIR/nvm.sh
+
+          if [ ! -d "$NVM_DIR" ]; then
+            curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.5/install.sh | bash
+          fi
+
+          source "$NVM_DIR/nvm.sh"
+
+          nvm install 20
+          nvm use 20
+          nvm alias default 20
+
+          npm install -g pm2
+
+          echo 'export NVM_DIR="$HOME/.nvm"' >> ~/.bashrc
+          echo '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"' >> ~/.bashrc
+          EOF
+
+          # -----------------------------
+          # DEPLOY APP
+          # -----------------------------
+          sudo -u devops bash << EOF
+          export NVM_DIR="/home/devops/.nvm"
+          source "\$NVM_DIR/nvm.sh"
+
+          cd ~
+
+          if [ ! -d "$APP_DIR" ]; then
+            git clone https://github.com/marandiwakar-lang/js-webapp.git $APP_DIR
+          fi
+
+          cd $APP_DIR
+          git pull origin main
 
           npm install
           npm run build
 
           pm2 restart nextjs-app || pm2 start npm --name "nextjs-app" -- start
+          pm2 save
+          EOF
+
+          # -----------------------------
+          # PM2 STARTUP
+          # -----------------------------
+          sudo -u devops bash -c "
+          export NVM_DIR='/home/devops/.nvm'
+          source \$NVM_DIR/nvm.sh
+          pm2 startup systemd -u devops --hp /home/devops
+          "
+
+          # -----------------------------
+          # NGINX CONFIG
+          # -----------------------------
+          sudo tee /etc/nginx/sites-available/default > /dev/null << 'NGINXEOF'
+          server {
+              listen 80;
+              server_name _;
+
+              add_header X-Frame-Options "DENY";
+              add_header X-Content-Type-Options "nosniff";
+
+              location ~ /\.git {
+                  deny all;
+                  return 404;
+              }
+
+              location / {
+                  proxy_pass http://localhost:3000;
+                  proxy_http_version 1.1;
+                  proxy_set_header Upgrade $http_upgrade;
+                  proxy_set_header Connection 'upgrade';
+                  proxy_set_header Host $host;
+              }
+          }
+          NGINXEOF
+
+          sudo nginx -t
+          sudo systemctl restart nginx
+
+          # -----------------------------
+          # ENABLE HTTPS
+          # -----------------------------
+          sudo certbot --nginx --non-interactive --agree-tos \
+            -m marandiwakar@gmail.com \
+            -d myjavascriptapp.duckdns.org || true
