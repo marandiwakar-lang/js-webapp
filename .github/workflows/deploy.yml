@@ -15,6 +15,8 @@ jobs:
     # -----------------------------
     - name: Checkout Code
       uses: actions/checkout@v4
+      env:
+        FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     # -----------------------------
     # 2. Setup Node
@@ -23,6 +25,8 @@ jobs:
       uses: actions/setup-node@v4
       with:
         node-version: '20'
+      env:
+        FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     # -----------------------------
     # 3. Install Dependencies
@@ -34,13 +38,22 @@ jobs:
       run: npm install --package-lock-only
 
     # -----------------------------
-    # 4. Build App
+    # 4. NPM Audit Gate
+    # Fail fast on critical/high vulnerabilities
+    # before wasting time on build + scan.
+    # Remove --audit-level=high to only block on critical.
+    # -----------------------------
+    - name: NPM Audit — Fail on Critical/High
+      run: npm audit --audit-level=high
+
+    # -----------------------------
+    # 5. Build App
     # -----------------------------
     - name: Build Application
       run: npm run build
 
     # -----------------------------
-    # 5. OWASP Scan
+    # 6. OWASP Dependency Scan
     # -----------------------------
     - name: Run OWASP Dependency Check
       uses: dependency-check/Dependency-Check_Action@main
@@ -51,7 +64,7 @@ jobs:
         out: "reports"
 
     # -----------------------------
-    # 6. Fix Docker Permission Issue
+    # 7. Fix Docker Permission Issue
     # -----------------------------
     - name: Prepare Writable Reports
       run: |
@@ -59,32 +72,37 @@ jobs:
         cp reports/dependency-check-report.json writable-reports/
 
     # -----------------------------
-    # 7. Generate HTML Report
+    # 8. Generate HTML Report
     # -----------------------------
     - name: Generate HTML Report
       run: python3 scripts/owasp_report.py
 
     # -----------------------------
-    # 8. Fail on Critical
+    # 9. Fail on Critical (OWASP)
     # -----------------------------
     - name: Fail if Critical Vulnerabilities Found
       run: |
         if grep -q "Critical" writable-reports/final-report.html; then
-          echo "❌ Critical vulnerabilities found!"
+          echo "❌ Critical vulnerabilities found in OWASP report!"
           exit 1
         fi
 
     # -----------------------------
-    # 9. Upload Report
+    # 10. Upload Report
+    # Always upload even if previous steps failed,
+    # so the report is available for investigation.
     # -----------------------------
     - name: Upload HTML Report
+      if: always()
       uses: actions/upload-artifact@v4
       with:
         name: owasp-report
         path: writable-reports/final-report.html
+      env:
+        FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     # -----------------------------
-    # 10. SERVER SETUP + DEPLOY
+    # 11. SERVER SETUP + DEPLOY
     # -----------------------------
     - name: Provision Server & Deploy App
       uses: appleboy/ssh-action@v1.0.3
@@ -169,18 +187,34 @@ jobs:
           npm install
           npm run build
 
-          pm2 restart nextjs-app || pm2 start npm --name "nextjs-app" -- start
+          # Gracefully restart if running, otherwise start fresh.
+          # Avoids the PM2 ERROR on first-time deploy.
+          if pm2 describe nextjs-app > /dev/null 2>&1; then
+            pm2 restart nextjs-app --update-env
+          else
+            pm2 start npm --name "nextjs-app" -- start
+          fi
+
           pm2 save
           EOF
 
           # -----------------------------
-          # PM2 STARTUP
+          # PM2 STARTUP (REBOOT PERSISTENCE)
+          # Generates the systemd unit and immediately
+          # executes it so the app survives server reboots.
           # -----------------------------
-          sudo -u devops bash -c "
-          export NVM_DIR='/home/devops/.nvm'
-          source \$NVM_DIR/nvm.sh
-          pm2 startup systemd -u devops --hp /home/devops
-          "
+          STARTUP_CMD=$(sudo -u devops bash -c "
+            export NVM_DIR='/home/devops/.nvm'
+            source \$NVM_DIR/nvm.sh
+            pm2 startup systemd -u devops --hp /home/devops
+          " 2>&1 | grep 'sudo env PATH')
+
+          if [ -n "$STARTUP_CMD" ]; then
+            eval "$STARTUP_CMD"
+            echo "✅ PM2 startup systemd unit registered."
+          else
+            echo "ℹ️ PM2 startup command not found — may already be registered."
+          fi
 
           # -----------------------------
           # NGINX CONFIG
@@ -198,12 +232,20 @@ jobs:
                   return 404;
               }
 
+              location ~ /\.env {
+                  deny all;
+                  return 404;
+              }
+
               location / {
                   proxy_pass http://localhost:3000;
                   proxy_http_version 1.1;
                   proxy_set_header Upgrade $http_upgrade;
                   proxy_set_header Connection 'upgrade';
                   proxy_set_header Host $host;
+                  proxy_set_header X-Real-IP $remote_addr;
+                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  proxy_set_header X-Forwarded-Proto $scheme;
               }
           }
           NGINXEOF
