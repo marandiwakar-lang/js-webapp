@@ -29,8 +29,12 @@ jobs:
     - name: Install Dependencies
       run: npm install
 
+    # 🔥 IMPORTANT: Generate lock file (fix OWASP warnings)
+    - name: Generate package-lock.json
+      run: npm install --package-lock-only
+
     # -----------------------------
-    # 4. Run Build
+    # 4. Build Application
     # -----------------------------
     - name: Build Application
       run: npm run build
@@ -47,14 +51,31 @@ jobs:
         out: "reports"
 
     # -----------------------------
-    # 6. Convert Report to Custom Format
+    # 🔥 FIX PERMISSIONS (your error fix)
     # -----------------------------
-    - name: Generate Custom Vulnerability Report
+    - name: Fix permissions
       run: |
-        python3 scripts/owasp_report.py
+        mkdir -p reports
+        chmod -R 777 reports
 
     # -----------------------------
-    # 7. Upload Report Artifact
+    # 6. Generate Custom Report
+    # -----------------------------
+    - name: Generate Custom Vulnerability Report
+      run: python3 scripts/owasp_report.py
+
+    # -----------------------------
+    # 7. Fail on Critical Issues
+    # -----------------------------
+    - name: Fail on Critical Vulnerabilities
+      run: |
+        if grep -q "Critical" reports/final-report.txt; then
+          echo "❌ Critical vulnerabilities found!"
+          exit 1
+        fi
+
+    # -----------------------------
+    # 8. Upload Report Artifact
     # -----------------------------
     - name: Upload Security Report
       uses: actions/upload-artifact@v4
@@ -63,7 +84,7 @@ jobs:
         path: reports/final-report.txt
 
     # -----------------------------
-    # 8. Deploy to EC2 (PM2)
+    # 9. Deploy to EC2
     # -----------------------------
     - name: Deploy to EC2
       uses: appleboy/ssh-action@v1.0.3
@@ -75,11 +96,11 @@ jobs:
         script: |
           cd /home/devops/js-webapp
           git pull origin main
-          
+
           export NVM_DIR="$HOME/.nvm"
           source $NVM_DIR/nvm.sh
-          
+
           npm install
           npm run build
-          
+
           pm2 restart nextjs-app || pm2 start npm --name "nextjs-app" -- start
