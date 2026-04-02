@@ -4,6 +4,9 @@ on:
   push:
     branches: [ main ]
 
+permissions:
+  contents: write
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -17,6 +20,7 @@ jobs:
       uses: actions/checkout@v4
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
+        persist-credentials: true
       env:
         FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
@@ -41,9 +45,9 @@ jobs:
 
     # -----------------------------
     # 4. Auto-fix NPM Vulnerabilities
-    # Runs npm audit fix, rebuilds, then commits
-    # the updated package.json + package-lock.json
-    # back to main so the repo stays clean.
+    # Runs npm audit fix, then commits the updated
+    # package.json + package-lock.json back to main
+    # so the repo stays clean.
     # The commit is skipped if nothing changed.
     # -----------------------------
     - name: Auto-fix NPM Vulnerabilities
