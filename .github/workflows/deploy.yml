@@ -50,40 +50,41 @@ jobs:
         out: "reports"
 
     # -----------------------------
-    # FIX PERMISSIONS
+    # ✅ COPY FILE (KEY FIX)
     # -----------------------------
-    - name: Fix permissions
+    - name: Copy report to writable location
       run: |
-        mkdir -p reports
-        chmod -R 777 reports
+        mkdir -p writable-reports
+        cp reports/dependency-check-report.json writable-reports/
 
     # -----------------------------
     # 6. Generate HTML Report
     # -----------------------------
     - name: Generate HTML Report
-      run: python3 scripts/owasp_report.py
+      run: |
+        python3 scripts/owasp_report.py
 
     # -----------------------------
     # 7. Fail on Critical
     # -----------------------------
     - name: Fail on Critical Vulnerabilities
       run: |
-        if grep -q "Critical" reports/final-report.html; then
+        if grep -q "Critical" writable-reports/final-report.html; then
           echo "❌ Critical vulnerabilities found!"
           exit 1
         fi
 
     # -----------------------------
-    # 8. Upload HTML Report
+    # 8. Upload Report
     # -----------------------------
     - name: Upload HTML Report
       uses: actions/upload-artifact@v4
       with:
         name: owasp-html-report
-        path: reports/final-report.html
+        path: writable-reports/final-report.html
 
     # -----------------------------
-    # 9. Deploy to EC2
+    # 9. Deploy
     # -----------------------------
     - name: Deploy to EC2
       uses: appleboy/ssh-action@v1.0.3
